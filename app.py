@@ -46,6 +46,9 @@ PER_PAGE = 9
 # Nomor WhatsApp admin untuk tombol "Hubungi Admin" (format internasional tanpa + atau 0 di depan)
 ADMIN_WHATSAPP = os.environ.get('FINDU_ADMIN_WA', '6281357029750')
 
+# Link Google Form evaluasi website
+EVALUASI_URL = 'https://forms.gle/FzEgqVcrF3W7YwLk9'
+
 
 def load_secret_key():
     """Secret key acak yang disimpan di file agar sesi tetap valid setelah restart."""
@@ -112,6 +115,7 @@ def init_db():
             location TEXT NOT NULL,
             contact TEXT,
             photo TEXT,
+            reporter_name TEXT,
             status TEXT NOT NULL DEFAULT 'Open' CHECK (status IN ('Open','Claimed','Returned')),
             reported_by INTEGER NOT NULL,
             claimed_by INTEGER,
@@ -146,6 +150,16 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_claims_item ON claims(item_id);
         CREATE INDEX IF NOT EXISTS idx_logs_item ON item_logs(item_id);
     ''')
+    # Migrasi: tambah kolom reporter_name pada database lama
+    cols = [r[1] for r in conn.execute('PRAGMA table_info(items)').fetchall()]
+    if 'reporter_name' not in cols:
+        conn.execute('ALTER TABLE items ADD COLUMN reporter_name TEXT')
+    # Akun sistem untuk laporan tanpa login (tidak bisa dipakai login)
+    if not conn.execute("SELECT 1 FROM users WHERE role = 'system'").fetchone():
+        conn.execute(
+            "INSERT INTO users (username, full_name, password_hash, role, created_at) VALUES (?,?,?,?,?)",
+            ('pelapor_tamu_sistem', 'Pelapor Tamu', generate_password_hash(secrets.token_hex(16)), 'system', now()))
+        conn.commit()
     if not conn.execute("SELECT 1 FROM users WHERE role = 'admin'").fetchone():
         # Default login admin: username "admin", password "Findu#2026!" (jika FINDU_ADMIN_PASSWORD tidak diisi).
         # SANGAT disarankan mengisi FINDU_ADMIN_PASSWORD sendiri sebelum dipublikasikan secara online.
@@ -185,8 +199,18 @@ def csrf_protect():
 app.jinja_env.globals['csrf_token'] = csrf_token
 app.jinja_env.globals['STATUS_BADGE'] = {'Open': 'primary', 'Claimed': 'warning text-dark', 'Returned': 'secondary'}
 app.jinja_env.globals['ADMIN_WHATSAPP'] = ADMIN_WHATSAPP
+app.jinja_env.globals['EVALUASI_URL'] = EVALUASI_URL
 
 FAILED_LOGINS = {}  # ip -> (jumlah, waktu_awal)
+ANON_REPORTS = {}   # ip -> [timestamp, ...]  (batas laporan tanpa login)
+
+
+def anon_report_limited(ip, limit=5, window=600):
+    """Maks. 5 laporan tanpa login per 10 menit per IP (anti-spam)."""
+    t = time.time()
+    hits = [x for x in ANON_REPORTS.get(ip, []) if t - x < window]
+    ANON_REPORTS[ip] = hits
+    return len(hits) >= limit
 
 
 def login_blocked(ip):
@@ -202,7 +226,7 @@ def login_required(view):
     def wrapper(*args, **kwargs):
         if 'user_id' not in session:
             flash('Silakan login terlebih dahulu.', 'warning')
-            return redirect(url_for('login', next=request.path))
+            return redirect(url_for('login', next=request.path if request.method == 'GET' else None))
         return view(*args, **kwargs)
     return wrapper
 
@@ -251,57 +275,55 @@ def index():
     return redirect(url_for('dashboard'))
 
 
-@app.route('/register', methods=['GET', 'POST'])
+@app.route('/register')
 def register():
-    if request.method == 'POST':
-        username = request.form.get('username', '').strip()
-        full_name = request.form.get('full_name', '').strip()
-        password = request.form.get('password', '')
-        confirm = request.form.get('confirm', '')
-        error = None
-        if not re.fullmatch(r'[A-Za-z0-9_.]{3,30}', username):
-            error = 'Username 3-30 karakter (huruf, angka, titik, underscore).'
-        elif not full_name or len(full_name) > 80:
-            error = 'Nama lengkap wajib diisi (maks. 80 karakter).'
-        elif len(password) < 6:
-            error = 'Password minimal 6 karakter.'
-        elif password != confirm:
-            error = 'Konfirmasi password tidak cocok.'
-        if error:
-            flash(error, 'danger')
-        else:
-            db = get_db()
-            try:
-                db.execute('INSERT INTO users (username, full_name, password_hash, created_at) VALUES (?,?,?,?)',
-                           (username, full_name, generate_password_hash(password), now()))
-                db.commit()
-                flash('Registrasi berhasil! Silakan login.', 'success')
-                return redirect(url_for('login'))
-            except sqlite3.IntegrityError:
-                flash('Username sudah terdaftar!', 'danger')
-    return render_template('register.html')
+    """Pendaftaran ditiadakan: pengguna umum cukup login dengan username & password bebas."""
+    return redirect(url_for('login'))
+
+
+def start_session(user):
+    session.clear()
+    session.update(user_id=user['id'], username=user['username'],
+                   full_name=user['full_name'], role=user['role'])
+    flash(f"Selamat datang, {user['full_name']}!", 'success')
+    return redirect(safe_next(request.args.get('next')))
 
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    """
+    - Pengguna umum: username BEBAS (2-30 karakter), password BEBAS (boleh kosong). Tanpa daftar.
+    - Admin: username & password harus benar.
+    """
     if request.method == 'POST':
         ip = request.remote_addr
         if login_blocked(ip):
             flash('Terlalu banyak percobaan gagal. Coba lagi dalam 5 menit.', 'danger')
             return render_template('login.html'), 429
-        username = request.form.get('username', '').strip()
+        username = ' '.join(request.form.get('username', '').split())
         password = request.form.get('password', '')
-        user = get_db().execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
-        if user and check_password_hash(user['password_hash'], password):
-            FAILED_LOGINS.pop(ip, None)
-            session.clear()
-            session.update(user_id=user['id'], username=user['username'],
-                           full_name=user['full_name'], role=user['role'])
-            flash('Berhasil login!', 'success')
-            return redirect(safe_next(request.args.get('next')))
-        count, start = FAILED_LOGINS.get(ip, (0, time.time()))
-        FAILED_LOGINS[ip] = (count + 1, start)
-        flash('Username atau password salah!', 'danger')
+        db = get_db()
+        user = db.execute('SELECT * FROM users WHERE username = ? COLLATE NOCASE', (username,)).fetchone()
+
+        if user and user['role'] == 'system':
+            flash('Username tidak tersedia, gunakan username lain.', 'danger')
+        elif user and user['role'] == 'admin':
+            if check_password_hash(user['password_hash'], password):
+                FAILED_LOGINS.pop(ip, None)
+                return start_session(user)
+            count, start = FAILED_LOGINS.get(ip, (0, time.time()))
+            FAILED_LOGINS[ip] = (count + 1, start)
+            flash('Password admin salah!', 'danger')
+        elif not re.fullmatch(r'[A-Za-z0-9_. ]{2,30}', username):
+            flash('Username 2-30 karakter (huruf, angka, spasi, titik, underscore).', 'danger')
+        else:
+            if not user:  # akun pengguna umum dibuat otomatis saat pertama login
+                cur = db.execute(
+                    'INSERT INTO users (username, full_name, password_hash, role, created_at) VALUES (?,?,?,?,?)',
+                    (username, username, generate_password_hash(secrets.token_hex(16)), 'user', now()))
+                db.commit()
+                user = db.execute('SELECT * FROM users WHERE id = ?', (cur.lastrowid,)).fetchone()
+            return start_session(user)
     return render_template('login.html')
 
 
@@ -314,7 +336,6 @@ def logout():
 
 # ============================== DASHBOARD & PENCARIAN ==============================
 @app.route('/dashboard')
-@login_required
 def dashboard():
     db = get_db()
     q = request.args.get('q', '').strip()
@@ -345,7 +366,7 @@ def dashboard():
 
     total = db.execute(f'SELECT COUNT(*) FROM items i {clause}', params).fetchone()[0]
     items = db.execute(f'''
-        SELECT i.*, u.full_name AS reporter FROM items i
+        SELECT i.*, COALESCE(i.reporter_name, u.full_name) AS reporter FROM items i
         JOIN users u ON u.id = i.reported_by {clause}
         ORDER BY i.id DESC LIMIT ? OFFSET ?''', params + [PER_PAGE, (page - 1) * PER_PAGE]).fetchall()
 
@@ -361,7 +382,6 @@ def dashboard():
 
 
 @app.route('/scan')
-@login_required
 def scan():
     return render_template('scan.html')
 
@@ -373,17 +393,30 @@ def kontak():
 
 # ============================== LAPOR BARANG ==============================
 @app.route('/lapor/<category>', methods=['GET', 'POST'])
-@login_required
 def lapor(category):
+    """Lapor barang hilang/ditemukan: TIDAK perlu login. (Klaim tetap wajib login.)"""
     if category not in CATEGORIES:
         abort(404)
+    uid = session.get('user_id')
     if request.method == 'POST':
         title = request.form.get('title', '').strip()
         location = request.form.get('location', '').strip()
         description = request.form.get('description', '').strip()
         contact = request.form.get('contact', '').strip()
+        reporter_name = ' '.join(request.form.get('reporter_name', '').split())
+        error = None
         if not title or not location or len(title) > 100 or len(location) > 150 or len(description) > 1000:
-            flash('Nama barang & lokasi wajib diisi dan tidak boleh terlalu panjang.', 'danger')
+            error = 'Nama barang & lokasi wajib diisi dan tidak boleh terlalu panjang.'
+        elif not uid and not (2 <= len(reporter_name) <= 50):
+            error = 'Nama pelapor wajib diisi (2-50 karakter).'
+        elif not uid and not contact:
+            error = 'Kontak (WA/Email) wajib diisi agar pemilik/penemu dapat dihubungi.'
+        elif len(contact) > 100:
+            error = 'Kontak terlalu panjang (maks. 100 karakter).'
+        elif not uid and anon_report_limited(request.remote_addr):
+            error = 'Terlalu banyak laporan dalam waktu singkat. Coba lagi beberapa menit lagi atau login.'
+        if error:
+            flash(error, 'danger')
             return render_template('lapor.html', category=category, form=request.form)
         try:
             photo = save_photo(request.files.get('photo'))
@@ -392,14 +425,20 @@ def lapor(category):
             return render_template('lapor.html', category=category, form=request.form)
 
         db = get_db()
+        if uid:
+            reported_by, name_col, actor, note_by = uid, None, uid, ''
+        else:
+            reported_by = db.execute("SELECT id FROM users WHERE role = 'system'").fetchone()['id']
+            name_col, actor, note_by = reporter_name, None, f' oleh {reporter_name} (tanpa login)'
+            ANON_REPORTS.setdefault(request.remote_addr, []).append(time.time())
         ts = now()
         cur = db.execute('''INSERT INTO items (title, category, description, location, contact, photo,
-                            reported_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)''',
-                         (title, category, description, location, contact, photo, session['user_id'], ts, ts))
+                            reporter_name, reported_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                         (title, category, description, location, contact, photo, name_col, reported_by, ts, ts))
         item_id = cur.lastrowid
-        add_log(db, item_id, session['user_id'], 'Dilaporkan', f'Barang {category} dilaporkan di {location}')
+        add_log(db, item_id, actor, 'Dilaporkan', f'Barang {category} dilaporkan di {location}{note_by}')
         db.commit()
-        flash('Laporan tersimpan! QR Code barang sudah dibuat.', 'success')
+        flash('Laporan tersimpan! QR Code barang sudah dibuat. Simpan/cetak QR agar mudah dilacak.', 'success')
         return redirect(url_for('item_detail', item_id=item_id))
     return render_template('lapor.html', category=category, form={})
 
@@ -428,7 +467,7 @@ def qr_code(item_id):
 def item_detail(item_id):
     """Halaman publik hasil scan QR. Kontak & klaim hanya untuk pengguna login."""
     db = get_db()
-    item = db.execute('''SELECT i.*, u.full_name AS reporter FROM items i
+    item = db.execute('''SELECT i.*, COALESCE(i.reporter_name, u.full_name) AS reporter FROM items i
                          JOIN users u ON u.id = i.reported_by WHERE i.id = ?''', (item_id,)).fetchone()
     if not item:
         abort(404)
@@ -499,7 +538,7 @@ def hapus(item_id):
 def admin():
     db = get_db()
     pending = db.execute('''
-        SELECT c.*, i.title, i.category, i.location, u.full_name AS claimant, r.full_name AS reporter
+        SELECT c.*, i.title, i.category, i.location, u.full_name AS claimant, COALESCE(i.reporter_name, r.full_name) AS reporter
         FROM claims c JOIN items i ON i.id = c.item_id
         JOIN users u ON u.id = c.user_id JOIN users r ON r.id = i.reported_by
         WHERE c.status = 'Pending' ORDER BY c.id ASC''').fetchall()
@@ -562,12 +601,15 @@ TEMPLATES = {
   <button class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#nv"><span class="navbar-toggler-icon"></span></button>
   <div class="collapse navbar-collapse" id="nv">
     <ul class="navbar-nav me-auto">
-    {% if session.user_id %}
       <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
+      <li class="nav-item"><a class="nav-link" href="{{ url_for('lapor', category='hilang') }}">Lapor Hilang</a></li>
+      <li class="nav-item"><a class="nav-link" href="{{ url_for('lapor', category='ditemukan') }}">Lapor Ditemukan</a></li>
       <li class="nav-item"><a class="nav-link" href="{{ url_for('scan') }}">Scan QR</a></li>
+    {% if session.user_id %}
       {% if session.role == 'admin' %}<li class="nav-item"><a class="nav-link" href="{{ url_for('admin') }}">Panel Admin</a></li>{% endif %}
     {% endif %}
       <li class="nav-item"><a class="nav-link" href="{{ url_for('kontak') }}">Hubungi Admin</a></li>
+      <li class="nav-item"><a class="nav-link" target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">Evaluasi Website</a></li>
     </ul>
     <div class="d-flex align-items-center gap-2">
     {% if session.user_id %}
@@ -575,8 +617,7 @@ TEMPLATES = {
       <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-outline-light btn-sm">Logout</button></form>
     {% else %}
-      <a class="btn btn-outline-light btn-sm" href="{{ url_for('login') }}">Login</a>
-      <a class="btn btn-light btn-sm" href="{{ url_for('register') }}">Register</a>
+      <a class="btn btn-light btn-sm" href="{{ url_for('login') }}">Masuk</a>
     {% endif %}</div>
   </div></div></nav>
 <main class="container my-4">
@@ -586,7 +627,8 @@ TEMPLATES = {
   {% block content %}{% endblock %}
 </main>
 <footer class="text-center text-muted small pb-5">FINDU &middot; Sistem Lost &amp; Found Berbasis QR Code &middot;
-  <a href="{{ url_for('kontak') }}">Hubungi Admin</a></footer>
+  <a href="{{ url_for('kontak') }}">Hubungi Admin</a> &middot;
+  <a target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">Isi Evaluasi Website</a></footer>
 <a href="https://wa.me/{{ ADMIN_WHATSAPP }}?text={{ 'Halo%20Admin%20FINDU%2C%20saya%20ingin%20bertanya%20tentang%20barang%20hilang%2Fditemukan.' }}"
    target="_blank" rel="noopener" class="position-fixed bottom-0 end-0 m-4 btn btn-success rounded-circle shadow"
    style="width:58px;height:58px;display:flex;align-items:center;justify-content:center;font-size:1.6rem;z-index:1050"
@@ -607,25 +649,15 @@ TEMPLATES = {
 </div></div></div>{% endblock %}''',
 
 'login.html': '''{% extends "base.html" %}{% block content %}
-<div class="row justify-content-center"><div class="col-md-4"><div class="card shadow-sm p-4">
-<h3 class="text-center mb-3">Login FINDU</h3>
-<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<div class="mb-3"><label class="form-label">Username</label><input name="username" class="form-control" required autofocus></div>
-<div class="mb-3"><label class="form-label">Password</label><input type="password" name="password" class="form-control" required></div>
-<button class="btn btn-success w-100">Masuk</button></form>
-<div class="text-center mt-3"><small>Belum punya akun? <a href="{{ url_for('register') }}">Register</a></small></div>
-</div></div></div>{% endblock %}''',
-
-'register.html': '''{% extends "base.html" %}{% block content %}
 <div class="row justify-content-center"><div class="col-md-5"><div class="card shadow-sm p-4">
-<h3 class="text-center mb-3">Register FINDU</h3>
+<h3 class="text-center mb-1">Masuk ke FINDU</h3>
+<p class="text-center text-muted small">Tanpa daftar. Isi username bebas (misal nama Anda), lalu masuk.</p>
 <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<div class="mb-3"><label class="form-label">Nama Lengkap</label><input name="full_name" class="form-control" maxlength="80" required></div>
-<div class="mb-3"><label class="form-label">Username (NIM/NIP disarankan)</label><input name="username" class="form-control" maxlength="30" required></div>
-<div class="mb-3"><label class="form-label">Password (min. 6 karakter)</label><input type="password" name="password" class="form-control" required></div>
-<div class="mb-3"><label class="form-label">Konfirmasi Password</label><input type="password" name="confirm" class="form-control" required></div>
-<button class="btn btn-primary w-100">Daftar</button></form>
-<div class="text-center mt-3"><small>Sudah punya akun? <a href="{{ url_for('login') }}">Login</a></small></div>
+<div class="mb-3"><label class="form-label">Username</label><input name="username" class="form-control" maxlength="30" required autofocus placeholder="Contoh: Budi"></div>
+<div class="mb-3"><label class="form-label">Password <span class="text-muted small">(bebas / boleh kosong; khusus admin wajib benar)</span></label>
+  <input type="password" name="password" class="form-control"></div>
+<button class="btn btn-success w-100">Masuk</button></form>
+<hr><a class="btn btn-outline-primary btn-sm w-100" target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">&#128221; Isi Evaluasi Website</a>
 </div></div></div>{% endblock %}''',
 
 'dashboard.html': '''{% extends "base.html" %}{% block content %}
@@ -637,6 +669,9 @@ TEMPLATES = {
     <a href="{{ url_for('scan') }}" class="btn btn-dark">&#128247; Scan QR</a>
   </div>
 </div>
+<div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2">
+  <span>&#128221; Bantu kami meningkatkan FINDU dengan mengisi formulir evaluasi website.</span>
+  <a class="btn btn-primary btn-sm" target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">Isi Evaluasi</a></div>
 <div class="row g-3 mb-4">
   {% for label, val, cls in [('Total Laporan', stats.total, 'dark'), ('Open', stats.open, 'primary'), ('Diklaim', stats.claimed, 'warning'), ('Dikembalikan', stats.returned, 'success')] %}
   <div class="col-6 col-md-3"><div class="card shadow-sm text-center p-3 border-{{ cls }}"><div class="fs-3 fw-bold text-{{ cls }}">{{ val }}</div><small>{{ label }}</small></div></div>
@@ -676,11 +711,13 @@ TEMPLATES = {
 <div class="row justify-content-center"><div class="col-md-7"><div class="card shadow-sm p-4">
 <h3 class="mb-3">Lapor Barang {{ category.capitalize() }}</h3>
 <form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{% if not session.user_id %}<div class="alert alert-info py-2 small">Anda melapor <strong>tanpa login</strong>. Untuk <em>mengklaim</em> barang, Anda tetap perlu login.</div>
+<div class="mb-3"><label class="form-label">Nama Pelapor</label><input name="reporter_name" value="{{ form.get('reporter_name','') }}" class="form-control" maxlength="50" placeholder="Nama Anda" required></div>{% endif %}
 <div class="mb-3"><label class="form-label">Nama Barang</label><input name="title" value="{{ form.get('title','') }}" class="form-control" maxlength="100" placeholder="Contoh: Kunci Motor Honda" required></div>
 <div class="mb-3"><label class="form-label">Lokasi ({{ 'Kehilangan' if category=='hilang' else 'Ditemukan' }})</label><input name="location" value="{{ form.get('location','') }}" class="form-control" maxlength="150" placeholder="Contoh: Perpustakaan Lantai 2" required></div>
 <div class="mb-3"><label class="form-label">Deskripsi / Ciri Khas</label><textarea name="description" class="form-control" rows="3" maxlength="1000">{{ form.get('description','') }}</textarea>
 {% if category == 'ditemukan' %}<div class="form-text">Sebaiknya jangan tulis ciri yang terlalu spesifik agar pemilik asli dapat membuktikan kepemilikan.</div>{% endif %}</div>
-<div class="mb-3"><label class="form-label">Kontak (WA/Email, hanya tampil untuk pengguna login)</label><input name="contact" value="{{ form.get('contact','') }}" class="form-control" maxlength="100"></div>
+<div class="mb-3"><label class="form-label">Kontak (WA/Email, hanya tampil untuk pengguna login){% if not session.user_id %} <span class="text-danger">*wajib</span>{% endif %}</label><input name="contact" value="{{ form.get('contact','') }}" class="form-control" maxlength="100" {{ 'required' if not session.user_id }}></div>
 <div class="mb-3"><label class="form-label">Foto (opsional, maks. 4 MB)</label><input type="file" name="photo" accept="image/png,image/jpeg,image/webp" class="form-control"></div>
 <button class="btn btn-primary w-100">Simpan &amp; Generate QR Code</button></form>
 </div></div></div>{% endblock %}''',
@@ -698,8 +735,9 @@ TEMPLATES = {
     <p class="text-muted"><small>Dilaporkan {{ item.created_at }} oleh {{ item.reporter }}</small></p>
     <p>{{ item.description or 'Tidak ada deskripsi.' }}</p>
     {% if session.user_id %}{% if item.contact %}<p><strong>Kontak pelapor:</strong> {{ item.contact }}</p>{% endif %}
-    {% else %}<div class="alert alert-info">Login untuk melihat kontak pelapor atau mengajukan klaim.
-      <a href="{{ url_for('login', next=request.path) }}">Login</a></div>{% endif %}
+    {% else %}<div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <span>Untuk <strong>mengklaim</strong> barang dan melihat kontak pelapor, silakan login terlebih dahulu.</span>
+      <a class="btn btn-primary btn-sm" href="{{ url_for('login', next=request.path) }}">Login untuk Klaim</a></div>{% endif %}
     {% if can_delete %}<form method="post" action="{{ url_for('hapus', item_id=item.id) }}" onsubmit="return confirm('Hapus laporan ini?')">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-danger btn-sm">Hapus Laporan</button></form>{% endif %}
   </div></div>
