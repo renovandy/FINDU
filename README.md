@@ -5,3 +5,6 @@ git push
 git add .
 git commit -m "Tampilan dashboard sidebar dan logo UM"
 git push
+git add .
+git commit -m "Tambah logo UM"
+git push
