@@ -35,6 +35,7 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_PATH = os.environ.get('FINDU_DB', os.path.join(BASE_DIR, 'findu.db'))
 UPLOAD_DIR = os.path.join(BASE_DIR, 'static', 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, 'static', 'img'), exist_ok=True)  # taruh logo-um.png di sini
 INSTANCE_DIR = os.path.join(BASE_DIR, 'instance')
 os.makedirs(INSTANCE_DIR, exist_ok=True)
 
@@ -591,53 +592,97 @@ TEMPLATES = {
 'base.html': '''<!DOCTYPE html>
 <html lang="id"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FINDU - Lost &amp; Found</title>
+<title>{% block head_title %}FINDU{% endblock %} - FINDU Lost &amp; Found</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-<style>body{background:#f4f6f9}.card{border-radius:12px}.qr-thumb{width:96px;height:96px}
-.item-photo{height:150px;object-fit:cover;border-radius:12px 12px 0 0}</style>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--blue:#0b4fa8;--ink:#12305c;--bg:#eef3fa;--shadow:0 2px 10px rgba(16,42,90,.07)}
+body{font-family:'Poppins',system-ui,sans-serif;background:var(--bg);color:#1f2d3d}
+.sidebar{position:fixed;top:0;bottom:0;left:0;width:250px;background:linear-gradient(180deg,#0b57c0,#083a7d);color:#fff;padding:22px 16px;display:flex;flex-direction:column;z-index:1040;overflow-y:auto}
+.brand{padding:4px 10px 18px;border-bottom:1px solid rgba(255,255,255,.18);margin-bottom:16px}
+.brand h4{font-weight:700;margin:0;font-size:1.4rem}.brand small{opacity:.8;font-size:.72rem}
+.side-link{display:flex;align-items:center;gap:12px;color:#e6efff;text-decoration:none;padding:10px 14px;border-radius:10px;font-size:.88rem;font-weight:500;margin-bottom:6px;border:0;background:none;width:100%;text-align:left}
+.side-link:hover{background:rgba(255,255,255,.14);color:#fff}
+.side-link.active{background:#fff;color:var(--blue);font-weight:600}
+.side-link i{font-size:1.05rem}
+.side-user{margin-top:auto;font-size:.78rem;opacity:.92;padding:12px 10px 0;border-top:1px solid rgba(255,255,255,.18)}
+.main{margin-left:250px;padding:22px 26px 70px}
+.topcard,.panel-card,.stat-card,.card{background:#fff;border:0;border-radius:16px;box-shadow:var(--shadow)}
+.topcard{padding:18px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
+.topcard h1{font-size:1.35rem;font-weight:700;color:var(--ink);margin:0;letter-spacing:.4px}
+.topcard p{margin:0;font-size:.8rem;color:#7b8aa3}
+.clock{background:#fff4e5;color:#e07b00;border:1px solid #ffd7a1;border-radius:8px;padding:4px 12px;font-size:.78rem;font-weight:600;white-space:nowrap}
+.logo-um{width:50px;height:50px;object-fit:contain}
+.logo-fallback,.logo-findu{width:46px;height:46px;border-radius:50%;background:var(--blue);color:#fff;align-items:center;justify-content:center;font-weight:700;font-size:.95rem}
+.logo-fallback{display:none}.logo-findu{display:flex;background:#fff;border:2px solid var(--blue);font-size:1.3rem}
+.stat-card{padding:16px 20px}
+.stat-card .lbl{font-size:.82rem;font-weight:600;color:var(--ink);display:flex;gap:8px;align-items:center}
+.stat-card .lbl i{color:var(--blue)}
+.stat-card .num{font-size:2.1rem;font-weight:700;color:#0e2a55;line-height:1.25}
+.panel-card{padding:20px 24px}
+.panel-card h5{font-weight:700;color:var(--ink);font-size:1rem}
+.table-findu th{font-size:.75rem;color:#7b8aa3;font-weight:600;background:#f5f8fd;border:0;white-space:nowrap}
+.table-findu td{font-size:.84rem;vertical-align:middle}
+.btn-primary{background:var(--blue);border-color:var(--blue)}
+.qr-thumb{width:96px;height:96px}.qr-mini{width:46px;height:46px}
+.menu-toggle{display:none}
+@media (max-width:991px){.sidebar{transform:translateX(-100%);transition:transform .25s}.sidebar.open{transform:none}
+.main{margin-left:0;padding:14px}.menu-toggle{display:inline-flex}.topcard{padding:14px 16px}}
+@media print{.sidebar,.topcard,footer,.wa-float,.menu-toggle{display:none!important}.main{margin:0}}
+</style>
 </head><body>
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark"><div class="container">
-  <a class="navbar-brand fw-bold" href="{{ url_for('dashboard') }}">&#128269; FINDU</a>
-  <button class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#nv"><span class="navbar-toggler-icon"></span></button>
-  <div class="collapse navbar-collapse" id="nv">
-    <ul class="navbar-nav me-auto">
-      <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
-      <li class="nav-item"><a class="nav-link" href="{{ url_for('lapor', category='hilang') }}">Lapor Hilang</a></li>
-      <li class="nav-item"><a class="nav-link" href="{{ url_for('lapor', category='ditemukan') }}">Lapor Ditemukan</a></li>
-      <li class="nav-item"><a class="nav-link" href="{{ url_for('scan') }}">Scan QR</a></li>
-    {% if session.user_id %}
-      {% if session.role == 'admin' %}<li class="nav-item"><a class="nav-link" href="{{ url_for('admin') }}">Panel Admin</a></li>{% endif %}
-    {% endif %}
-      <li class="nav-item"><a class="nav-link" href="{{ url_for('kontak') }}">Hubungi Admin</a></li>
-      <li class="nav-item"><a class="nav-link" target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">Evaluasi Website</a></li>
-    </ul>
+{% set ep = request.endpoint %}{% set cat = (request.view_args or {}).get('category') %}
+<aside class="sidebar" id="sidebar">
+  <div class="brand"><h4>&#128269; FINDU</h4><small>Lost &amp; Found Berbasis QR Code</small></div>
+  <a class="side-link {{ 'active' if ep=='dashboard' }}" href="{{ url_for('dashboard') }}"><i class="bi bi-speedometer2"></i> Dashboard</a>
+  <a class="side-link {{ 'active' if ep=='lapor' and cat=='hilang' }}" href="{{ url_for('lapor', category='hilang') }}"><i class="bi bi-exclamation-circle"></i> Lapor Barang Hilang</a>
+  <a class="side-link {{ 'active' if ep=='lapor' and cat=='ditemukan' }}" href="{{ url_for('lapor', category='ditemukan') }}"><i class="bi bi-box-seam"></i> Lapor Barang Ditemukan</a>
+  <a class="side-link {{ 'active' if ep=='scan' }}" href="{{ url_for('scan') }}"><i class="bi bi-qr-code-scan"></i> Scan QR Code</a>
+  {% if session.role == 'admin' %}<a class="side-link {{ 'active' if ep in ('admin','keputusan_klaim') }}" href="{{ url_for('admin') }}"><i class="bi bi-shield-check"></i> Panel Admin</a>{% endif %}
+  <a class="side-link {{ 'active' if ep=='kontak' }}" href="{{ url_for('kontak') }}"><i class="bi bi-telephone"></i> Hubungi Admin</a>
+  <a class="side-link" target="_blank" rel="noopener" href="{{ EVALUASI_URL }}"><i class="bi bi-clipboard2-check"></i> Evaluasi Website</a>
+  {% if session.user_id %}
+  <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="side-link"><i class="bi bi-box-arrow-left"></i> Logout</button></form>
+  {% else %}<a class="side-link {{ 'active' if ep=='login' }}" href="{{ url_for('login') }}"><i class="bi bi-box-arrow-in-right"></i> Masuk</a>{% endif %}
+  <div class="side-user">{% if session.user_id %}Halo, <strong>{{ session.full_name }}</strong><br>({{ session.role }}){% else %}Belum login<br>Klaim barang butuh login{% endif %}</div>
+</aside>
+<div class="main">
+  <div class="topcard">
+    <div class="d-flex align-items-center gap-3">
+      <button class="btn btn-outline-primary btn-sm menu-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="Menu"><i class="bi bi-list"></i></button>
+      <div><h1>{% block page_title %}FINDU{% endblock %}</h1><p>{% block page_sub %}Sistem Lost &amp; Found Berbasis QR Code &middot; Universitas Negeri Malang{% endblock %}</p></div>
+    </div>
     <div class="d-flex align-items-center gap-2">
-    {% if session.user_id %}
-      <span class="text-white small">{{ session.full_name }} ({{ session.role }})</span>
-      <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button class="btn btn-outline-light btn-sm">Logout</button></form>
-    {% else %}
-      <a class="btn btn-light btn-sm" href="{{ url_for('login') }}">Masuk</a>
-    {% endif %}</div>
-  </div></div></nav>
-<main class="container my-4">
+      <span class="clock d-none d-sm-inline" id="jam">--.--.-- WIB</span>
+      <img class="logo-um" src="{{ url_for('static', filename='img/logo-um.png') }}" alt="Logo Universitas Negeri Malang"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <div class="logo-fallback">UM</div>
+      <div class="logo-findu" title="FINDU">&#128269;</div>
+    </div>
+  </div>
   {% with messages = get_flashed_messages(with_categories=true) %}{% for c, m in messages %}
     <div class="alert alert-{{ c }} alert-dismissible fade show">{{ m }}<button class="btn-close" data-bs-dismiss="alert"></button></div>
   {% endfor %}{% endwith %}
   {% block content %}{% endblock %}
-</main>
-<footer class="text-center text-muted small pb-5">FINDU &middot; Sistem Lost &amp; Found Berbasis QR Code &middot;
-  <a href="{{ url_for('kontak') }}">Hubungi Admin</a> &middot;
-  <a target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">Isi Evaluasi Website</a></footer>
-<a href="https://wa.me/{{ ADMIN_WHATSAPP }}?text={{ 'Halo%20Admin%20FINDU%2C%20saya%20ingin%20bertanya%20tentang%20barang%20hilang%2Fditemukan.' }}"
-   target="_blank" rel="noopener" class="position-fixed bottom-0 end-0 m-4 btn btn-success rounded-circle shadow"
-   style="width:58px;height:58px;display:flex;align-items:center;justify-content:center;font-size:1.6rem;z-index:1050"
-   title="Hubungi Admin lewat WhatsApp">&#128222;</a>
+  <footer class="text-center text-muted small mt-4">FINDU &middot; Sistem Lost &amp; Found Berbasis QR Code &middot; Universitas Negeri Malang &middot;
+    <a href="{{ url_for('kontak') }}">Hubungi Admin</a> &middot;
+    <a target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">Isi Evaluasi Website</a></footer>
+</div>
+<a href="https://wa.me/{{ ADMIN_WHATSAPP }}?text=Halo%20Admin%20FINDU%2C%20saya%20ingin%20bertanya%20tentang%20barang%20hilang%2Fditemukan." target="_blank" rel="noopener"
+   class="wa-float position-fixed bottom-0 end-0 m-4 btn btn-success rounded-circle shadow"
+   style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;z-index:1050" title="Hubungi Admin lewat WhatsApp"><i class="bi bi-whatsapp"></i></a>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+function tick(){var el=document.getElementById('jam');if(!el)return;
+  var t=new Date().toLocaleTimeString('id-ID',{timeZone:'Asia/Jakarta',hour12:false});el.textContent=t.split(':').join('.')+' WIB';}
+tick();setInterval(tick,1000);
+</script>
 {% block scripts %}{% endblock %}
 </body></html>''',
 
-'kontak.html': '''{% extends "base.html" %}{% block content %}
+'kontak.html': '''{% extends "base.html" %}{% block page_title %}HUBUNGI ADMIN{% endblock %}{% block page_sub %}Bantuan untuk kendala login, laporan, dan klaim{% endblock %}{% block content %}
 <div class="row justify-content-center"><div class="col-md-6"><div class="card shadow-sm p-4 text-center">
 <h3 class="mb-3">Hubungi Admin FINDU</h3>
 <p class="text-muted">Ada kendala login, laporan barang, atau klaim yang perlu dibantu admin? Hubungi kami melalui:</p>
@@ -648,7 +693,7 @@ TEMPLATES = {
 <p class="small text-muted">Jam layanan admin: 08.00 - 20.00 WIB (QR Code &amp; website tetap aktif 24 jam)</p>
 </div></div></div>{% endblock %}''',
 
-'login.html': '''{% extends "base.html" %}{% block content %}
+'login.html': '''{% extends "base.html" %}{% block page_title %}MASUK{% endblock %}{% block page_sub %}Pengguna umum bebas login, admin wajib password{% endblock %}{% block content %}
 <div class="row justify-content-center"><div class="col-md-5"><div class="card shadow-sm p-4">
 <h3 class="text-center mb-1">Masuk ke FINDU</h3>
 <p class="text-center text-muted small">Tanpa daftar. Isi username bebas (misal nama Anda), lalu masuk.</p>
@@ -660,54 +705,66 @@ TEMPLATES = {
 <hr><a class="btn btn-outline-primary btn-sm w-100" target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">&#128221; Isi Evaluasi Website</a>
 </div></div></div>{% endblock %}''',
 
-'dashboard.html': '''{% extends "base.html" %}{% block content %}
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-  <h2 class="mb-0">Dashboard Lost &amp; Found</h2>
-  <div class="d-flex gap-2 flex-wrap">
-    <a href="{{ url_for('lapor', category='hilang') }}" class="btn btn-warning">+ Lapor Barang Hilang</a>
-    <a href="{{ url_for('lapor', category='ditemukan') }}" class="btn btn-info">+ Lapor Barang Ditemukan</a>
-    <a href="{{ url_for('scan') }}" class="btn btn-dark">&#128247; Scan QR</a>
-  </div>
-</div>
-<div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2">
-  <span>&#128221; Bantu kami meningkatkan FINDU dengan mengisi formulir evaluasi website.</span>
-  <a class="btn btn-primary btn-sm" target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">Isi Evaluasi</a></div>
+'dashboard.html': '''{% extends "base.html" %}
+{% block head_title %}Dashboard{% endblock %}
+{% block page_title %}DASHBOARD{% endblock %}
+{% block page_sub %}Lost &amp; Found Kampus &middot; Universitas Negeri Malang{% endblock %}
+{% block content %}
 <div class="row g-3 mb-4">
-  {% for label, val, cls in [('Total Laporan', stats.total, 'dark'), ('Open', stats.open, 'primary'), ('Diklaim', stats.claimed, 'warning'), ('Dikembalikan', stats.returned, 'success')] %}
-  <div class="col-6 col-md-3"><div class="card shadow-sm text-center p-3 border-{{ cls }}"><div class="fs-3 fw-bold text-{{ cls }}">{{ val }}</div><small>{{ label }}</small></div></div>
+  {% for label, val, icon in [('Total Laporan', stats.total, 'bi-clipboard-data'), ('Masih Open', stats.open, 'bi-search'), ('Sedang Diklaim', stats.claimed, 'bi-hourglass-split'), ('Dikembalikan', stats.returned, 'bi-check2-circle')] %}
+  <div class="col-6 col-lg-3"><div class="stat-card"><div class="lbl"><i class="bi {{ icon }}"></i> {{ label }}</div><div class="num">{{ val }}</div></div></div>
   {% endfor %}
 </div>
-<form class="card shadow-sm p-3 mb-4" method="get"><div class="row g-2">
-  <div class="col-md-5"><input name="q" value="{{ q }}" class="form-control" placeholder="Cari nama, lokasi, deskripsi, atau kode QR (FINDU-ITEM-1)"></div>
-  <div class="col-md-3"><select name="category" class="form-select"><option value="">Semua kategori</option>
-    <option value="hilang" {{ 'selected' if category=='hilang' }}>Hilang</option><option value="ditemukan" {{ 'selected' if category=='ditemukan' }}>Ditemukan</option></select></div>
-  <div class="col-md-2"><select name="status" class="form-select"><option value="">Semua status</option>
-    {% for s in statuses %}<option {{ 'selected' if status==s }}>{{ s }}</option>{% endfor %}</select></div>
-  <div class="col-md-2"><button class="btn btn-primary w-100">Cari</button></div>
-</div></form>
-{% if not items %}<div class="alert alert-warning text-center">Belum ada barang yang sesuai.</div>{% endif %}
-<div class="row">{% for i in items %}
-<div class="col-md-4 mb-4"><div class="card shadow-sm h-100">
-  {% if i.photo %}<img class="item-photo" src="{{ url_for('static', filename='uploads/' ~ i.photo) }}" alt="Foto">{% endif %}
-  <div class="card-body">
-    <div class="d-flex justify-content-between mb-2">
-      <span class="badge {{ 'bg-danger' if i.category=='hilang' else 'bg-success' }}">{{ i.category|upper }}</span>
-      <span class="badge bg-{{ STATUS_BADGE[i.status] }}">{{ i.status }}</span></div>
-    <h5 class="card-title">{{ i.title }}</h5>
-    <p class="text-muted mb-1"><small>&#128205; {{ i.location }}</small></p>
-    <p class="card-text">{{ (i.description or '')|truncate(90) }}</p>
-    <div class="d-flex align-items-center gap-3">
-      <img class="qr-thumb" src="{{ url_for('qr_code', item_id=i.id) }}" alt="QR"><small class="text-muted">ID #{{ i.id }}<br>Pelapor: {{ i.reporter }}</small></div>
+
+<div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2 border-0">
+  <span><i class="bi bi-clipboard2-check"></i> Bantu kami meningkatkan FINDU dengan mengisi formulir evaluasi website.</span>
+  <a class="btn btn-primary btn-sm" target="_blank" rel="noopener" href="{{ EVALUASI_URL }}">Isi Evaluasi</a></div>
+
+<div class="panel-card mb-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <h5 class="mb-0">Status Barang Terbaru</h5>
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="{{ url_for('lapor', category='hilang') }}" class="btn btn-warning btn-sm">+ Lapor Hilang</a>
+      <a href="{{ url_for('lapor', category='ditemukan') }}" class="btn btn-info btn-sm text-white">+ Lapor Ditemukan</a>
+      <a href="{{ url_for('scan') }}" class="btn btn-dark btn-sm"><i class="bi bi-qr-code-scan"></i> Scan QR</a>
+    </div>
   </div>
-  <div class="card-footer bg-white"><a class="btn btn-outline-primary btn-sm w-100" href="{{ url_for('item_detail', item_id=i.id) }}">Detail &amp; Pelacakan</a></div>
-</div></div>{% endfor %}</div>
-{% if pages > 1 %}<nav><ul class="pagination justify-content-center">
-  {% for p in range(1, pages + 1) %}<li class="page-item {{ 'active' if p==page }}">
-  <a class="page-link" href="{{ url_for('dashboard', q=q, category=category, status=status, page=p) }}">{{ p }}</a></li>{% endfor %}
-</ul></nav>{% endif %}
+  <form method="get" class="row g-2 mb-3">
+    <div class="col-md-5"><input name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Cari nama, lokasi, deskripsi, atau kode QR (FINDU-ITEM-1)"></div>
+    <div class="col-md-3"><select name="category" class="form-select form-select-sm"><option value="">Semua kategori</option>
+      <option value="hilang" {{ 'selected' if category=='hilang' }}>Hilang</option><option value="ditemukan" {{ 'selected' if category=='ditemukan' }}>Ditemukan</option></select></div>
+    <div class="col-md-2"><select name="status" class="form-select form-select-sm"><option value="">Semua status</option>
+      {% for s in statuses %}<option {{ 'selected' if status==s }}>{{ s }}</option>{% endfor %}</select></div>
+    <div class="col-md-2"><button class="btn btn-primary btn-sm w-100">Cari</button></div>
+  </form>
+  <div class="table-responsive">
+    <table class="table table-findu align-middle mb-0">
+      <thead><tr><th>QR</th><th>Barang</th><th>Kategori</th><th>Lokasi</th><th>Pelapor</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+      {% for i in items %}
+      <tr>
+        <td><img class="qr-mini" src="{{ url_for('qr_code', item_id=i.id) }}" alt="QR #{{ i.id }}"></td>
+        <td><strong>{{ i.title }}</strong><div class="small text-muted">#{{ i.id }} &middot; {{ (i.description or '')|truncate(50) }}</div></td>
+        <td><span class="badge {{ 'bg-danger' if i.category=='hilang' else 'bg-success' }}">{{ i.category|upper }}</span></td>
+        <td>{{ i.location }}</td>
+        <td>{{ i.reporter }}</td>
+        <td><span class="badge bg-{{ STATUS_BADGE[i.status] }}">{{ i.status }}</span></td>
+        <td class="text-end"><a class="btn btn-outline-primary btn-sm" href="{{ url_for('item_detail', item_id=i.id) }}">Detail</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="text-center text-muted py-4">Belum ada barang yang sesuai.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}<nav class="mt-3"><ul class="pagination pagination-sm justify-content-center mb-0">
+    {% for p in range(1, pages + 1) %}<li class="page-item {{ 'active' if p==page }}">
+    <a class="page-link" href="{{ url_for('dashboard', q=q, category=category, status=status, page=p) }}">{{ p }}</a></li>{% endfor %}
+  </ul></nav>{% endif %}
+</div>
 {% endblock %}''',
 
-'lapor.html': '''{% extends "base.html" %}{% block content %}
+'lapor.html': '''{% extends "base.html" %}{% block page_title %}LAPOR BARANG{% endblock %}{% block page_sub %}Laporkan barang hilang atau ditemukan, tanpa login{% endblock %}{% block content %}
 <div class="row justify-content-center"><div class="col-md-7"><div class="card shadow-sm p-4">
 <h3 class="mb-3">Lapor Barang {{ category.capitalize() }}</h3>
 <form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -722,7 +779,7 @@ TEMPLATES = {
 <button class="btn btn-primary w-100">Simpan &amp; Generate QR Code</button></form>
 </div></div></div>{% endblock %}''',
 
-'item.html': '''{% extends "base.html" %}{% block content %}
+'item.html': '''{% extends "base.html" %}{% block page_title %}DETAIL BARANG{% endblock %}{% block page_sub %}Pelacakan status dan QR Code barang{% endblock %}{% block content %}
 <div class="row g-4">
 <div class="col-lg-7"><div class="card shadow-sm">
   {% if item.photo %}<img class="w-100" style="max-height:320px;object-fit:cover;border-radius:12px 12px 0 0" src="{{ url_for('static', filename='uploads/' ~ item.photo) }}" alt="Foto">{% endif %}
@@ -770,7 +827,7 @@ TEMPLATES = {
   </div>
 </div></div>{% endblock %}''',
 
-'scan.html': '''{% extends "base.html" %}{% block content %}
+'scan.html': '''{% extends "base.html" %}{% block page_title %}SCAN QR CODE{% endblock %}{% block page_sub %}Pindai QR Code untuk membuka halaman barang{% endblock %}{% block content %}
 <div class="row justify-content-center"><div class="col-md-6"><div class="card shadow-sm p-4">
 <h3 class="text-center mb-3">Scan QR Code Barang</h3>
 <div id="reader" class="mb-3"></div><div id="msg" class="text-center text-muted small mb-3">Arahkan kamera ke QR Code barang.</div>
@@ -796,7 +853,7 @@ if (window.Html5Qrcode) {
 }
 </script>{% endblock %}''',
 
-'admin.html': '''{% extends "base.html" %}{% block content %}
+'admin.html': '''{% extends "base.html" %}{% block page_title %}PANEL ADMIN{% endblock %}{% block page_sub %}Verifikasi klaim dan pantau aktivitas{% endblock %}{% block content %}
 <h2 class="mb-3">Panel Admin</h2>
 <p class="text-muted">Total pengguna terdaftar: <strong>{{ users }}</strong></p>
 <h4>Klaim Menunggu Verifikasi ({{ pending|length }})</h4>
@@ -819,7 +876,7 @@ if (window.Html5Qrcode) {
   <li class="list-group-item small"><strong>{{ l.action }}</strong> &ndash; {{ l.title }} <span class="text-muted">({{ l.actor or 'sistem' }}, {{ l.created_at }})</span></li>{% endfor %}</ul></div>
 {% endblock %}''',
 
-'error.html': '''{% extends "base.html" %}{% block content %}
+'error.html': '''{% extends "base.html" %}{% block page_title %}TERJADI KESALAHAN{% endblock %}{% block page_sub %}Halaman tidak dapat ditampilkan{% endblock %}{% block content %}
 <div class="text-center py-5"><h1 class="display-4">{{ code }}</h1><p class="lead">{{ message }}</p>
 <a class="btn btn-primary" href="{{ url_for('dashboard') }}">Kembali ke Dashboard</a></div>{% endblock %}''',
 }
