@@ -35,7 +35,7 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_PATH = os.environ.get('FINDU_DB', os.path.join(BASE_DIR, 'findu.db'))
 UPLOAD_DIR = os.path.join(BASE_DIR, 'static', 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(os.path.join(BASE_DIR, 'static', 'img'), exist_ok=True)  # taruh logo-um.png di sini
+os.makedirs(os.path.join(BASE_DIR, 'static', 'img'), exist_ok=True)  #src="{{ url_for('static', filename='img/logo-um.png') }}"
 INSTANCE_DIR = os.path.join(BASE_DIR, 'instance')
 os.makedirs(INSTANCE_DIR, exist_ok=True)
 
@@ -597,6 +597,26 @@ TEMPLATES = {
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+.sidebar {
+  position: fixed; left: 0; top: 0;
+  height: 100vh; width: 240px;
+  transition: transform .3s ease;
+  z-index: 900;
+}
+.content {
+  margin-left: 240px;
+  transition: margin-left .3s ease;
+}
+
+/* Saat menu ditutup */
+body.sidebar-closed .sidebar { transform: translateX(-100%); }
+body.sidebar-closed .content { margin-left: 0; }
+
+.btn-toggle {
+  position: fixed; top: 12px; left: 12px; z-index: 1000;
+  background: #1a3c8f; color: #fff; border: 0;
+  border-radius: 8px; padding: 8px 12px; cursor: pointer;
+}
 :root{--blue:#0b4fa8;--ink:#12305c;--bg:#eef3fa;--shadow:0 2px 10px rgba(16,42,90,.07)}
 body{font-family:'Poppins',system-ui,sans-serif;background:var(--bg);color:#1f2d3d}
 .sidebar{position:fixed;top:0;bottom:0;left:0;width:250px;background:linear-gradient(180deg,#0b57c0,#083a7d);color:#fff;padding:22px 16px;display:flex;flex-direction:column;z-index:1040;overflow-y:auto}
@@ -632,6 +652,7 @@ body{font-family:'Poppins',system-ui,sans-serif;background:var(--bg);color:#1f2d
 @media print{.sidebar,.topcard,footer,.wa-float,.menu-toggle{display:none!important}.main{margin:0}}
 </style>
 </head><body>
+<button id="toggleSidebar" class="btn-toggle" aria-label="Buka atau tutup menu">☰</button>
 {% set ep = request.endpoint %}{% set cat = (request.view_args or {}).get('category') %}
 <aside class="sidebar" id="sidebar">
   <div class="brand"><h4>&#128269; FINDU</h4><small>Lost &amp; Found Berbasis QR Code</small></div>
@@ -656,8 +677,8 @@ body{font-family:'Poppins',system-ui,sans-serif;background:var(--bg);color:#1f2d
     </div>
     <div class="d-flex align-items-center gap-2">
       <span class="clock d-none d-sm-inline" id="jam">--.--.-- WIB</span>
-      <img class="logo-um" src="{{ url_for('static', filename='img/logo-um.png') }}" alt="Logo Universitas Negeri Malang"
-           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <img src="{{ url_for('static', filename='img/logo-um.png') }}"
+            alt="Logo Universitas Negeri Malang" class="logo-um">
       <div class="logo-fallback">UM</div>
       <div class="logo-findu" title="FINDU">&#128269;</div>
     </div>
@@ -680,6 +701,23 @@ function tick(){var el=document.getElementById('jam');if(!el)return;
 tick();setInterval(tick,1000);
 </script>
 {% block scripts %}{% endblock %}
+<script>
+  const body = document.body;
+  const btn = document.getElementById('toggleSidebar');
+
+  try {
+    const saved = localStorage.getItem('sidebarClosed');
+    if (saved === '1') body.classList.add('sidebar-closed');
+    if (saved === null && window.innerWidth < 768) body.classList.add('sidebar-closed');
+  } catch (e) {}
+
+  btn.addEventListener('click', function () {
+    body.classList.toggle('sidebar-closed');
+    try {
+      localStorage.setItem('sidebarClosed', body.classList.contains('sidebar-closed') ? '1' : '0');
+    } catch (e) {}
+  });
+</script>
 </body></html>''',
 
 'kontak.html': '''{% extends "base.html" %}{% block page_title %}HUBUNGI ADMIN{% endblock %}{% block page_sub %}Bantuan untuk kendala login, laporan, dan klaim{% endblock %}{% block content %}
