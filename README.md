@@ -8,3 +8,4 @@ git push
 git add .
 git commit -m "Tambah logo UM"
 git push
+git ls-files static/img
