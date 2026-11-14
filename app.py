@@ -13,6 +13,7 @@ Variabel lingkungan (opsional):
     FINDU_HOST / FINDU_PORT / FINDU_DEBUG
 """
 import io
+import json
 import os
 import re
 import secrets
@@ -24,9 +25,9 @@ from urllib.parse import urlparse
 
 import qrcode
 from flask import (Flask, abort, flash, g, redirect, render_template,
-                   request, send_file, session, url_for)
+                   Response, request, send_file, session, url_for)
 from jinja2 import DictLoader
-from PIL import Image
+from PIL import Image, ImageDraw
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -35,7 +36,7 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_PATH = os.environ.get('FINDU_DB', os.path.join(BASE_DIR, 'findu.db'))
 UPLOAD_DIR = os.path.join(BASE_DIR, 'static', 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(os.path.join(BASE_DIR, 'static', 'img'), exist_ok=True)  #src="{{ url_for('static', filename='img/logo-um.png') }}"
+os.makedirs(os.path.join(BASE_DIR, 'static', 'img'), exist_ok=True)  # taruh logo-um.png di sini
 INSTANCE_DIR = os.path.join(BASE_DIR, 'instance')
 os.makedirs(INSTANCE_DIR, exist_ok=True)
 
@@ -201,6 +202,24 @@ app.jinja_env.globals['csrf_token'] = csrf_token
 app.jinja_env.globals['STATUS_BADGE'] = {'Open': 'primary', 'Claimed': 'warning text-dark', 'Returned': 'secondary'}
 app.jinja_env.globals['ADMIN_WHATSAPP'] = ADMIN_WHATSAPP
 app.jinja_env.globals['EVALUASI_URL'] = EVALUASI_URL
+
+
+def logo_um_url():
+    """Cari logo UM di static/img (logo-um.png/jpg/jpeg/webp/svg, huruf besar/kecil bebas)."""
+    img_dir = os.path.join(BASE_DIR, 'static', 'img')
+    try:
+        names = sorted(os.listdir(img_dir))
+    except OSError:
+        return None
+    for fn in names:
+        stem, ext = os.path.splitext(fn.lower())
+        if stem == 'logo-um' and ext in ('.png', '.jpg', '.jpeg', '.webp', '.svg'):
+            mtime = int(os.path.getmtime(os.path.join(img_dir, fn)))
+            return url_for('static', filename='img/' + fn, v=mtime)
+    return None
+
+
+app.jinja_env.globals['logo_um_url'] = logo_um_url
 
 FAILED_LOGINS = {}  # ip -> (jumlah, waktu_awal)
 ANON_REPORTS = {}   # ip -> [timestamp, ...]  (batas laporan tanpa login)
@@ -576,6 +595,81 @@ def keputusan_klaim(claim_id, decision):
     return redirect(url_for('admin'))
 
 
+# ============================== PWA (APLIKASI TERPASANG) ==============================
+@app.route('/manifest.webmanifest')
+def manifest():
+    data = {
+        'name': 'FINDU - Lost & Found QR Code', 'short_name': 'FINDU', 'lang': 'id',
+        'description': 'Sistem Lost and Found berbasis QR Code untuk lingkungan pendidikan.',
+        'start_url': '/dashboard', 'scope': '/', 'display': 'standalone',
+        'background_color': '#eef3fa', 'theme_color': '#0b4fa8',
+        'icons': [
+            {'src': '/icon-192.png', 'sizes': '192x192', 'type': 'image/png', 'purpose': 'any'},
+            {'src': '/icon-512.png', 'sizes': '512x512', 'type': 'image/png', 'purpose': 'any'},
+            {'src': '/icon-512.png', 'sizes': '512x512', 'type': 'image/png', 'purpose': 'maskable'},
+        ],
+    }
+    return Response(json.dumps(data), mimetype='application/manifest+json')
+
+
+@app.route('/sw.js')
+def service_worker():
+    js = """const CACHE = 'findu-v1';
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.add('/offline')).then(() => self.skipWaiting()));
+});
+self.addEventListener('activate', e => {
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+});
+self.addEventListener('fetch', e => {
+  if (e.request.mode === 'navigate') {
+    e.respondWith(fetch(e.request).catch(() => caches.match('/offline')));
+  }
+});
+"""
+    resp = Response(js, mimetype='application/javascript')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['Service-Worker-Allowed'] = '/'
+    return resp
+
+
+@app.route('/offline')
+def offline():
+    return render_template('offline.html')
+
+
+@app.route('/icon-<int:size>.png')
+def app_icon(size):
+    """Ikon aplikasi dibuat otomatis (motif QR, area aman untuk ikon maskable)."""
+    if size not in (96, 144, 180, 192, 512):
+        abort(404)
+    img = Image.new('RGB', (size, size), '#0b4fa8')
+    d = ImageDraw.Draw(img)
+    u = size / 100.0
+
+    def box(x, y, w, h, color):
+        d.rectangle([x * u, y * u, (x + w) * u - 1, (y + h) * u - 1], fill=color)
+
+    for x, y in ((24, 24), (54, 24), (24, 54)):
+        box(x, y, 22, 22, '#ffffff'); box(x + 4, y + 4, 14, 14, '#0b4fa8'); box(x + 8, y + 8, 6, 6, '#ffffff')
+    box(54, 54, 10, 10, '#FFB703'); box(68, 54, 8, 8, '#ffffff'); box(54, 68, 8, 8, '#ffffff'); box(66, 66, 10, 10, '#FFB703')
+    buf = io.BytesIO()
+    img.save(buf, 'PNG')
+    buf.seek(0)
+    resp = send_file(buf, mimetype='image/png')
+    resp.headers['Cache-Control'] = 'public, max-age=86400'
+    return resp
+
+
+@app.route('/.well-known/assetlinks.json')
+def assetlinks():
+    """Untuk aplikasi Android (TWA): taruh file assetlinks.json dari PWABuilder di folder proyek."""
+    path = os.path.join(BASE_DIR, 'assetlinks.json')
+    if not os.path.exists(path):
+        abort(404)
+    return send_file(path, mimetype='application/json')
+
+
 # ============================== ERROR HANDLER ==============================
 @app.errorhandler(400)
 @app.errorhandler(403)
@@ -592,35 +686,21 @@ TEMPLATES = {
 'base.html': '''<!DOCTYPE html>
 <html lang="id"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="{{ url_for('manifest') }}">
+<meta name="theme-color" content="#0b4fa8">
+<link rel="apple-touch-icon" href="{{ url_for('app_icon', size=192) }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>{% block head_title %}FINDU{% endblock %} - FINDU Lost &amp; Found</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-.sidebar {
-  position: fixed; left: 0; top: 0;
-  height: 100vh; width: 240px;
-  transition: transform .3s ease;
-  z-index: 900;
-}
-.content {
-  margin-left: 240px;
-  transition: margin-left .3s ease;
-}
-
-/* Saat menu ditutup */
-body.sidebar-closed .sidebar { transform: translateX(-100%); }
-body.sidebar-closed .content { margin-left: 0; }
-
-.btn-toggle {
-  position: fixed; top: 12px; left: 12px; z-index: 1000;
-  background: #1a3c8f; color: #fff; border: 0;
-  border-radius: 8px; padding: 8px 12px; cursor: pointer;
-}
 :root{--blue:#0b4fa8;--ink:#12305c;--bg:#eef3fa;--shadow:0 2px 10px rgba(16,42,90,.07)}
 body{font-family:'Poppins',system-ui,sans-serif;background:var(--bg);color:#1f2d3d}
 .sidebar{position:fixed;top:0;bottom:0;left:0;width:250px;background:linear-gradient(180deg,#0b57c0,#083a7d);color:#fff;padding:22px 16px;display:flex;flex-direction:column;z-index:1040;overflow-y:auto}
-.brand{padding:4px 10px 18px;border-bottom:1px solid rgba(255,255,255,.18);margin-bottom:16px}
+.brand{padding:4px 10px 18px;border-bottom:1px solid rgba(255,255,255,.18);margin-bottom:16px;display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.side-close{background:rgba(255,255,255,.16);border:0;color:#fff;border-radius:8px;width:34px;height:34px;flex-shrink:0}
+.side-close:hover{background:rgba(255,255,255,.28)}
 .brand h4{font-weight:700;margin:0;font-size:1.4rem}.brand small{opacity:.8;font-size:.72rem}
 .side-link{display:flex;align-items:center;gap:12px;color:#e6efff;text-decoration:none;padding:10px 14px;border-radius:10px;font-size:.88rem;font-weight:500;margin-bottom:6px;border:0;background:none;width:100%;text-align:left}
 .side-link:hover{background:rgba(255,255,255,.14);color:#fff}
@@ -646,16 +726,27 @@ body{font-family:'Poppins',system-ui,sans-serif;background:var(--bg);color:#1f2d
 .table-findu td{font-size:.84rem;vertical-align:middle}
 .btn-primary{background:var(--blue);border-color:var(--blue)}
 .qr-thumb{width:96px;height:96px}.qr-mini{width:46px;height:46px}
-.menu-toggle{display:none}
+.menu-toggle{display:inline-flex}
+.sidebar{transition:transform .25s}.main{transition:margin-left .25s}
+body.sb-hidden .sidebar{transform:translateX(-100%)}body.sb-hidden .main{margin-left:0}
 @media (max-width:991px){.sidebar{transform:translateX(-100%);transition:transform .25s}.sidebar.open{transform:none}
 .main{margin-left:0;padding:14px}.menu-toggle{display:inline-flex}.topcard{padding:14px 16px}}
 @media print{.sidebar,.topcard,footer,.wa-float,.menu-toggle{display:none!important}.main{margin:0}}
 </style>
 </head><body>
-<button id="toggleSidebar" class="btn-toggle" aria-label="Buka atau tutup menu">☰</button>
+<script>
+function toggleSidebar(){
+  if(window.innerWidth>=992){
+    var h=document.body.classList.toggle('sb-hidden');
+    try{localStorage.setItem('findu_sb',h?'1':'0');}catch(e){}
+  }else{document.getElementById('sidebar').classList.toggle('open');}
+}
+try{if(window.innerWidth>=992&&localStorage.getItem('findu_sb')==='1')document.body.classList.add('sb-hidden');}catch(e){}
+</script>
 {% set ep = request.endpoint %}{% set cat = (request.view_args or {}).get('category') %}
 <aside class="sidebar" id="sidebar">
-  <div class="brand"><h4>&#128269; FINDU</h4><small>Lost &amp; Found Berbasis QR Code</small></div>
+  <div class="brand"><div><h4>&#128269; FINDU</h4><small>Lost &amp; Found Berbasis QR Code</small></div>
+    <button class="side-close" type="button" onclick="toggleSidebar()" aria-label="Tutup menu" title="Tutup menu"><i class="bi bi-x-lg"></i></button></div>
   <a class="side-link {{ 'active' if ep=='dashboard' }}" href="{{ url_for('dashboard') }}"><i class="bi bi-speedometer2"></i> Dashboard</a>
   <a class="side-link {{ 'active' if ep=='lapor' and cat=='hilang' }}" href="{{ url_for('lapor', category='hilang') }}"><i class="bi bi-exclamation-circle"></i> Lapor Barang Hilang</a>
   <a class="side-link {{ 'active' if ep=='lapor' and cat=='ditemukan' }}" href="{{ url_for('lapor', category='ditemukan') }}"><i class="bi bi-box-seam"></i> Lapor Barang Ditemukan</a>
@@ -667,19 +758,21 @@ body{font-family:'Poppins',system-ui,sans-serif;background:var(--bg);color:#1f2d
   <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button class="side-link"><i class="bi bi-box-arrow-left"></i> Logout</button></form>
   {% else %}<a class="side-link {{ 'active' if ep=='login' }}" href="{{ url_for('login') }}"><i class="bi bi-box-arrow-in-right"></i> Masuk</a>{% endif %}
+  <button class="side-link d-none" id="btn-install" type="button"><i class="bi bi-download"></i> Pasang Aplikasi</button>
   <div class="side-user">{% if session.user_id %}Halo, <strong>{{ session.full_name }}</strong><br>({{ session.role }}){% else %}Belum login<br>Klaim barang butuh login{% endif %}</div>
 </aside>
 <div class="main">
   <div class="topcard">
     <div class="d-flex align-items-center gap-3">
-      <button class="btn btn-outline-primary btn-sm menu-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="Menu"><i class="bi bi-list"></i></button>
+      <button class="btn btn-outline-primary btn-sm menu-toggle" onclick="toggleSidebar()" aria-label="Buka/tutup menu" title="Buka/tutup menu"><i class="bi bi-list"></i></button>
       <div><h1>{% block page_title %}FINDU{% endblock %}</h1><p>{% block page_sub %}Sistem Lost &amp; Found Berbasis QR Code &middot; Universitas Negeri Malang{% endblock %}</p></div>
     </div>
     <div class="d-flex align-items-center gap-2">
       <span class="clock d-none d-sm-inline" id="jam">--.--.-- WIB</span>
-      <img src="{{ url_for('static', filename='img/logo-um.png') }}"
-            alt="Logo Universitas Negeri Malang" class="logo-um">
-      <div class="logo-fallback">UM</div>
+      {% set um = logo_um_url() %}
+      {% if um %}<img class="logo-um" src="{{ um }}" alt="Logo Universitas Negeri Malang"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">{% endif %}
+      <div class="logo-fallback"{% if not um %} style="display:flex"{% endif %}>UM</div>
       <div class="logo-findu" title="FINDU">&#128269;</div>
     </div>
   </div>
@@ -700,24 +793,15 @@ function tick(){var el=document.getElementById('jam');if(!el)return;
   var t=new Date().toLocaleTimeString('id-ID',{timeZone:'Asia/Jakarta',hour12:false});el.textContent=t.split(':').join('.')+' WIB';}
 tick();setInterval(tick,1000);
 </script>
-{% block scripts %}{% endblock %}
 <script>
-  const body = document.body;
-  const btn = document.getElementById('toggleSidebar');
-
-  try {
-    const saved = localStorage.getItem('sidebarClosed');
-    if (saved === '1') body.classList.add('sidebar-closed');
-    if (saved === null && window.innerWidth < 768) body.classList.add('sidebar-closed');
-  } catch (e) {}
-
-  btn.addEventListener('click', function () {
-    body.classList.toggle('sidebar-closed');
-    try {
-      localStorage.setItem('sidebarClosed', body.classList.contains('sidebar-closed') ? '1' : '0');
-    } catch (e) {}
-  });
+if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/sw.js').catch(function(){});});}
+var deferredPrompt=null;
+window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();deferredPrompt=e;var b=document.getElementById('btn-install');if(b)b.classList.remove('d-none');});
+var instBtn=document.getElementById('btn-install');
+if(instBtn){instBtn.addEventListener('click',function(){if(!deferredPrompt)return;deferredPrompt.prompt();deferredPrompt.userChoice.then(function(){deferredPrompt=null;instBtn.classList.add('d-none');});});}
+window.addEventListener('appinstalled',function(){if(instBtn)instBtn.classList.add('d-none');});
 </script>
+{% block scripts %}{% endblock %}
 </body></html>''',
 
 'kontak.html': '''{% extends "base.html" %}{% block page_title %}HUBUNGI ADMIN{% endblock %}{% block page_sub %}Bantuan untuk kendala login, laporan, dan klaim{% endblock %}{% block content %}
@@ -913,6 +997,12 @@ if (window.Html5Qrcode) {
 <div class="card shadow-sm"><ul class="list-group list-group-flush">{% for l in recent %}
   <li class="list-group-item small"><strong>{{ l.action }}</strong> &ndash; {{ l.title }} <span class="text-muted">({{ l.actor or 'sistem' }}, {{ l.created_at }})</span></li>{% endfor %}</ul></div>
 {% endblock %}''',
+
+'offline.html': '''<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offline - FINDU</title><style>body{font-family:system-ui,sans-serif;background:#eef3fa;color:#12305c;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;text-align:center;padding:24px}
+.box{background:#fff;border-radius:16px;padding:32px;max-width:420px;box-shadow:0 2px 10px rgba(16,42,90,.1)}button{background:#0b4fa8;color:#fff;border:0;border-radius:10px;padding:10px 22px;font-size:1rem;cursor:pointer}</style></head>
+<body><div class="box"><h2>&#128268; Anda sedang offline</h2><p>FINDU membutuhkan koneksi internet untuk membuka data barang. Periksa jaringan Anda, lalu coba lagi.</p>
+<button onclick="location.reload()">Coba Lagi</button></div></body></html>''',
 
 'error.html': '''{% extends "base.html" %}{% block page_title %}TERJADI KESALAHAN{% endblock %}{% block page_sub %}Halaman tidak dapat ditampilkan{% endblock %}{% block content %}
 <div class="text-center py-5"><h1 class="display-4">{{ code }}</h1><p class="lead">{{ message }}</p>
